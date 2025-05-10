@@ -29,34 +29,40 @@ class EventStore
     full_event
   end
 
-  def read(match: {})
-    return [] if match.empty?
+  def read(query:)
+    match_variants = query.to_match_variants
 
-    matched_id_sets = []
-
-    match.each do |key, value|
-      index_subdir = File.join(@index_dir, key.to_s)
-      next unless Dir.exist?(index_subdir)
-
-      matching_files =
-        if value.is_a?(Regexp)
-          Dir.glob(File.join(index_subdir, '*.jsonl')).select do |file|
-            decoded = File.basename(file, '.jsonl')
-            decoded.match?(value)
-          end
-        else
-          file = File.join(index_subdir, value.to_s + '.jsonl')
-          File.exist?(file) ? [file] : []
-        end
-
-      ids = matching_files.flat_map { |file| File.readlines(file).map(&:strip) }.uniq
-      matched_id_sets << ids
+    # Handle Query.all
+    if match_variants == [{}]
+      return Dir.glob(File.join(@events_dir, '*.json')).map do |path|
+        JSON.parse(File.read(path))
+      end
     end
 
-    return [] if matched_id_sets.empty? || matched_id_sets.any?(&:empty?)
+    # Step 1: Resolve all index file paths needed (per key/value or regex)
+    index_cache = {}
+    match_variants.each do |match|
+      match.each do |key, value|
+        index_cache[key.to_s] ||= resolve_index_files(key.to_s, value)
+      end
+    end
 
-    matched_ids = matched_id_sets.reduce(&:&)
+    # Step 2: Read each index file once
+    file_id_map = {}
+    index_cache.values.flatten.uniq.each do |path|
+      file_id_map[path] = File.readlines(path, chomp: true) if File.exist?(path)
+    end
 
+    # Step 3: For each match variant, collect IDs using intersect (AND logic)
+    matched_ids = match_variants.flat_map do |match|
+      id_sets = match.map do |key, value|
+        files = resolve_index_files(key.to_s, value)
+        files.flat_map { |file| file_id_map[file] || [] }.uniq
+      end
+      id_sets.empty? || id_sets.any?(&:empty?) ? [] : id_sets.reduce(&:&)
+    end.uniq
+
+    # Step 4: Load events
     matched_ids.map do |id|
       path = File.join(@events_dir, "#{id}.json")
       File.exist?(path) ? JSON.parse(File.read(path)) : nil
@@ -80,6 +86,20 @@ class EventStore
       path = File.join(@index_dir, key.to_s, value.to_s + '.jsonl')
       FileUtils.mkdir_p(File.dirname(path))
       File.open(path, 'a') { |f| f.puts(event["id"]) }
+    end
+  end
+
+  def resolve_index_files(key, value)
+    index_subdir = File.join(@index_dir, key)
+    return [] unless Dir.exist?(index_subdir)
+
+    if value.is_a?(Regexp)
+      Dir.glob(File.join(index_subdir, "*.jsonl")).select do |file|
+        File.basename(file, ".jsonl").match?(value)
+      end
+    else
+      file = File.join(index_subdir, value.to_s + ".jsonl")
+      File.exist?(file) ? [file] : []
     end
   end
 

@@ -2,6 +2,8 @@ require 'sinatra'
 require "sinatra/reloader" if development?
 
 require_relative 'event_store'
+require_relative 'query_item'
+require_relative 'query'
 
 store = EventStore.new
 
@@ -23,20 +25,9 @@ end
 get '/events' do
   content_type :json
 
-  filters = params.transform_keys(&:to_sym).transform_values do |v|
-    if %w[name email title type].include?(params.keys.first)
-      Regexp.new("^#{Regexp.escape(v)}", Regexp::IGNORECASE)
-    else
-      v
-    end
-  end
+  query = Query.all
 
-  filters = { 
-    "cart_id" => "111", 
-    "type" => Regexp.new("^(ItemAdded|ItemRemoved)$", Regexp::IGNORECASE)
-  }
-
-  store.read(match: filters).to_json
+  store.read(query: query).to_json
 end
 
 post '/add_item' do
@@ -51,16 +42,20 @@ post '/add_item' do
       status 400
       return { error: "Missing required parameters: #{missing_params.join(', ')}" }.to_json
     end
-    
-    events = store.read(match: {
-      "cart_id" => payload["cart_id"],
-      "type" => Regexp.new("^(ItemAdded|ItemRemoved)$", Regexp::IGNORECASE)
-    })
-    
+
+    query = Query.new([
+      QueryItem.new(
+        types: %w[ItemAdded ItemRemoved CartCleared], 
+        properties: {"cart_id" => payload["cart_id"]
+      })
+    ])
+    events = store.read(query: query)
+
     cart_items_count = events.reduce(0) do |count, event|
       case event["type"]
       when "ItemAdded" then count + 1
       when "ItemRemoved" then count - 1
+      when "CartCleared" then 0
       else count
       end
     end
@@ -94,11 +89,14 @@ delete '/remove_item' do
   begin
     payload = JSON.parse(request.body.read)
 
-    events = store.read(match: {
-      "cart_id" => payload["cart_id"],
-      "item_id" => payload["item_id"],
-      "type" => Regexp.new("^(ItemAdded|ItemRemoved)$", Regexp::IGNORECASE)
-    })
+    query = Query.new([
+      QueryItem.new(
+        types: %w[ItemAdded ItemRemoved], 
+        properties: {"cart_id" => payload["cart_id"], "item_id" => payload["item_id"]}
+      )
+    ])
+
+    events = store.read(query: query)
 
     item_count = events.reduce(0) do |count, event|
       case event["type"]
@@ -149,10 +147,14 @@ end
 get '/cart/:cart_id/items' do
   content_type :json
   
-  events = store.read(match: {
-    "cart_id" => params[:cart_id],
-    "type" => Regexp.new("^(ItemAdded|ItemRemoved)$", Regexp::IGNORECASE)
-  })
+  query = Query.new([
+    QueryItem.new(
+      types: %w[ItemAdded ItemRemoved CartCleared], 
+      properties: {"cart_id" => params[:cart_id]}
+    )
+  ])
+
+  events = store.read(query: query)
   
   cart_data = events.reduce({ cart_id: params[:cart_id], items: [], total: 0.0 }) do |acc, event|
     case event["type"]
