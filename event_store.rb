@@ -8,11 +8,13 @@ class EventStore
     @base_dir = base_dir
     @events_dir = File.join(@base_dir, 'events')
     @index_dir = File.join(@base_dir, 'index')
+    @log_file = File.join(@base_dir, 'log', 'append.log')
     @subscribers = []
     @async_queue = Queue.new
 
     FileUtils.mkdir_p(@events_dir)
     FileUtils.mkdir_p(@index_dir)
+    FileUtils.mkdir_p(File.dirname(@log_file))
 
     start_async_dispatcher
   end
@@ -22,6 +24,7 @@ class EventStore
     full_event = event.merge("id" => event_id)
 
     File.write(File.join(@events_dir, "#{event_id}.json"), JSON.pretty_generate(full_event))
+    File.open(@log_file, 'a') { |f| f.puts(event_id) }
 
     index_event(full_event)
     dispatch(full_event)
@@ -29,14 +32,28 @@ class EventStore
     full_event
   end
 
+  def position_for(event_id)
+    return nil unless File.exist?(@log_file)
+
+    IO.popen(["grep", "-n", "^#{event_id}$", @log_file]) do |io|
+      line = io.gets
+      return nil unless line
+      line.split(":").first.to_i
+    end
+  end
+
   def read(query:)
     match_variants = query.to_match_variants
 
     # Handle Query.all
     if match_variants == [{}]
-      return Dir.glob(File.join(@events_dir, '*.json')).map do |path|
-        JSON.parse(File.read(path))
-      end
+      return File.readlines(@log_file, chomp: true).map do |event_id|
+        path = File.join(@events_dir, "#{event_id}.json")
+        next unless File.exist?(path)
+        event = JSON.parse(File.read(path))
+        event["position"] = position_for(event_id)
+        event
+      end.compact
     end
 
     # Step 1: Resolve all index file paths needed (per key/value or regex)
@@ -65,7 +82,11 @@ class EventStore
     # Step 4: Load events
     matched_ids.map do |id|
       path = File.join(@events_dir, "#{id}.json")
-      File.exist?(path) ? JSON.parse(File.read(path)) : nil
+      next unless File.exist?(path)
+
+      event = JSON.parse(File.read(path))
+      event["sequence"] = sequence_for(id)
+      event
     end.compact
   end
 
