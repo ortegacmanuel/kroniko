@@ -1,0 +1,25 @@
+PATH
+  remote: .
+  specs:
+    kroniko (0.1.0)
+      fileutils
+      json
+      securerandom
+      thread
+
+GEM
+  remote: http://rubygems.org/
+  specs:
+    fileutils (1.7.3)
+    json (2.7.6)
+    securerandom (0.3.2)
+    thread (0.2.2)
+
+PLATFORMS
+  ruby
+
+DEPENDENCIES
+  kroniko!
+
+BUNDLED WITH
+   2.1.4
