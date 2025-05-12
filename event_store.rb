@@ -58,54 +58,59 @@ class EventStore
     end
   end
 
-  def read(query:)
+  def read(query:, options: nil)
     match_variants = query.to_match_variants
 
     # Handle Query.all
     if match_variants == [{}]
-      return File.readlines(@log_file, chomp: true).map do |event_id|
-        path = File.join(@events_dir, "#{event_id}.json")
+      events = query_all
+    else ## Matching query
+      # Step 1: Resolve all index file paths needed (per match variant)
+      all_index_files = match_variants.flat_map do |match|
+        match.flat_map { |key, value| resolve_index_files(key.to_s, value) }
+      end.uniq
+
+      # Step 2: Read each index file once
+      file_id_map = {}
+      all_index_files.each do |path|
+        file_id_map[path] = File.readlines(path, chomp: true) if File.exist?(path)
+      end
+
+      # Step 3: Collect matched ID sets per match variant (OR logic)
+      match_sets = match_variants.map do |match|
+        id_sets = match.map do |key, value|
+          files = resolve_index_files(key.to_s, value)
+          files.flat_map { |file| file_id_map[file] || [] }.uniq
+        end
+        id_sets.empty? || id_sets.any?(&:empty?) ? [] : id_sets.reduce(&:&)
+      end
+
+      matched_ids = match_sets.flatten.uniq
+
+      # Step 4: Load and return events ordered by position
+      events = matched_ids.map do |id|
+        path = File.join(@events_dir, "#{id}.json")
         next unless File.exist?(path)
-        event = JSON.parse(File.read(path))
-        event["position"] = position_for(event_id)
-        event
+
+        raw = JSON.parse(File.read(path))
+        SequencedEvent.new(
+          type: raw["type"],
+          data: raw["data"],
+          position: position_for(id)
+        )
       end.compact
     end
 
-    # Step 1: Resolve all index file paths needed (per match variant)
-    all_index_files = match_variants.flat_map do |match|
-      match.flat_map { |key, value| resolve_index_files(key.to_s, value) }
-    end.uniq
-
-    # Step 2: Read each index file once
-    file_id_map = {}
-    all_index_files.each do |path|
-      file_id_map[path] = File.readlines(path, chomp: true) if File.exist?(path)
+    # Apply ReadOptions (if any)
+    events = events.sort_by(&:position)
+    if options&.backwards
+      events.reverse!
+      events = events.select { |e| e.position <= options.from } if options.from
+    elsif options&.from
+      events = events.select { |e| e.position >= options.from }
     end
 
-    # Step 3: Collect matched ID sets per match variant (OR logic)
-    match_sets = match_variants.map do |match|
-      id_sets = match.map do |key, value|
-        files = resolve_index_files(key.to_s, value)
-        files.flat_map { |file| file_id_map[file] || [] }.uniq
-      end
-      id_sets.empty? || id_sets.any?(&:empty?) ? [] : id_sets.reduce(&:&)
-    end
-
-    matched_ids = match_sets.flatten.uniq
-
-    # Step 4: Load and return events ordered by position
-    matched_ids.map do |id|
-      path = File.join(@events_dir, "#{id}.json")
-      next unless File.exist?(path)
-
-      raw = JSON.parse(File.read(path))
-      SequencedEvent.new(
-        type: raw["type"],
-        data: raw["data"],
-        position: position_for(id)
-      )
-    end.compact.sort_by(&:position)
+    events
   end
 
   def subscribe(&block)
@@ -157,5 +162,19 @@ class EventStore
         subscriber.call(event)
       end
     end
+  end
+
+  def query_all
+    return File.readlines(@log_file, chomp: true).map do |event_id|
+      path = File.join(@events_dir, "#{event_id}.json")
+      next unless File.exist?(path)
+
+      raw = JSON.parse(File.read(path))
+      SequencedEvent.new(
+        type: raw["type"],
+        data: raw["data"],
+        position: position_for(event_id)
+      )
+    end.compact
   end
 end

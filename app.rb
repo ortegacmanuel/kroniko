@@ -5,6 +5,7 @@ require_relative 'event_store'
 require_relative 'query_item'
 require_relative 'query'
 require_relative 'event'
+require_relative 'read_options'
 
 class ItemAdded < Event; end
 class ItemRemoved < Event; end
@@ -30,9 +31,10 @@ end
 get '/events' do
   content_type :json
 
-  query = Query.new([QueryItem.new(types: %w[ItemAdded ItemRemoved CartCleared], properties: {"cart_id" => "cart124"})])
+  query = Query.all
+  options = ReadOptions.new(from: 2, backwards: true)
 
-  store.read(query: query).map(&:to_h).to_json
+  store.read(query: query, options: options).map(&:to_h).to_json
 end
 
 post '/add_item' do
