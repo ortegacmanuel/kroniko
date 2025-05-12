@@ -1,4 +1,4 @@
-require File.expand_path('lib/kroniko/version', __dir__)
+require_relative "lib/kroniko/version"
 
 Gem::Specification.new do |spec|
   spec.name          = "kroniko"
