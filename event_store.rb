@@ -3,6 +3,11 @@ require 'fileutils'
 require 'securerandom'
 require 'thread'
 
+require_relative 'event'
+require_relative 'sequenced_event'
+
+require 'debug'
+
 class EventStore
   def initialize(base_dir = 'event_store')
     @base_dir = base_dir
@@ -19,11 +24,22 @@ class EventStore
     start_async_dispatcher
   end
 
-  def write(event)
-    event_id = "#{Time.now.to_f.round(6)}-#{SecureRandom.uuid}"
-    full_event = event.merge("id" => event_id)
+  def write(events:)
+    raise ArgumentError, "events must be an array of Event" unless events.is_a?(Array)
 
-    File.write(File.join(@events_dir, "#{event_id}.json"), JSON.pretty_generate(full_event))
+    events.map do |event|
+      raise ArgumentError, "each item must be an Event" unless event.is_a?(Event)
+      write_single(event)
+    end
+  end
+
+  def write_single(event)
+    event_id = "#{Time.now.to_f.round(6)}-#{SecureRandom.uuid}"
+    event_path = File.join(@events_dir, "#{event_id}.json")
+
+    full_event = event.to_h.merge("id" => event_id)
+
+    File.write(event_path, JSON.pretty_generate(full_event))
     File.open(@log_file, 'a') { |f| f.puts(event_id) }
 
     index_event(full_event)
@@ -56,38 +72,40 @@ class EventStore
       end.compact
     end
 
-    # Step 1: Resolve all index file paths needed (per key/value or regex)
-    index_cache = {}
-    match_variants.each do |match|
-      match.each do |key, value|
-        index_cache[key.to_s] ||= resolve_index_files(key.to_s, value)
-      end
-    end
+    # Step 1: Resolve all index file paths needed (per match variant)
+    all_index_files = match_variants.flat_map do |match|
+      match.flat_map { |key, value| resolve_index_files(key.to_s, value) }
+    end.uniq
 
     # Step 2: Read each index file once
     file_id_map = {}
-    index_cache.values.flatten.uniq.each do |path|
+    all_index_files.each do |path|
       file_id_map[path] = File.readlines(path, chomp: true) if File.exist?(path)
     end
 
-    # Step 3: For each match variant, collect IDs using intersect (AND logic)
-    matched_ids = match_variants.flat_map do |match|
+    # Step 3: Collect matched ID sets per match variant (OR logic)
+    match_sets = match_variants.map do |match|
       id_sets = match.map do |key, value|
         files = resolve_index_files(key.to_s, value)
         files.flat_map { |file| file_id_map[file] || [] }.uniq
       end
       id_sets.empty? || id_sets.any?(&:empty?) ? [] : id_sets.reduce(&:&)
-    end.uniq
+    end
 
-    # Step 4: Load events
+    matched_ids = match_sets.flatten.uniq
+
+    # Step 4: Load and return events ordered by position
     matched_ids.map do |id|
       path = File.join(@events_dir, "#{id}.json")
       next unless File.exist?(path)
 
-      event = JSON.parse(File.read(path))
-      event["sequence"] = sequence_for(id)
-      event
-    end.compact
+      raw = JSON.parse(File.read(path))
+      SequencedEvent.new(
+        type: raw["type"],
+        data: raw["data"],
+        position: position_for(id)
+      )
+    end.compact.sort_by(&:position)
   end
 
   def subscribe(&block)
@@ -101,12 +119,16 @@ class EventStore
   private
 
   def index_event(event)
-    event.each do |key, value|
-      next if key == "id"
+    path_type = File.join(@index_dir, "type", event["type"] + ".jsonl")
+    FileUtils.mkdir_p(File.dirname(path_type))
+    File.open(path_type, 'a') { |f| f.puts(event["id"]) }
 
-      path = File.join(@index_dir, key.to_s, value.to_s + '.jsonl')
-      FileUtils.mkdir_p(File.dirname(path))
-      File.open(path, 'a') { |f| f.puts(event["id"]) }
+    if event["data"].is_a?(Hash)
+      event["data"].each do |key, value|
+        path = File.join(@index_dir, "data.#{key}", value.to_s + '.jsonl')
+        FileUtils.mkdir_p(File.dirname(path))
+        File.open(path, 'a') { |f| f.puts(event["id"]) }
+      end
     end
   end
 

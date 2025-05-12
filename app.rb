@@ -4,6 +4,11 @@ require "sinatra/reloader" if development?
 require_relative 'event_store'
 require_relative 'query_item'
 require_relative 'query'
+require_relative 'event'
+
+class ItemAdded < Event; end
+class ItemRemoved < Event; end
+class CartCleared < Event; end
 
 store = EventStore.new
 
@@ -25,9 +30,9 @@ end
 get '/events' do
   content_type :json
 
-  query = Query.all
+  query = Query.new([QueryItem.new(types: %w[ItemAdded ItemRemoved CartCleared], properties: {"cart_id" => "cart124"})])
 
-  store.read(query: query).to_json
+  store.read(query: query).map(&:to_h).to_json
 end
 
 post '/add_item' do
@@ -52,7 +57,7 @@ post '/add_item' do
     events = store.read(query: query)
 
     cart_items_count = events.reduce(0) do |count, event|
-      case event["type"]
+      case event.type
       when "ItemAdded" then count + 1
       when "ItemRemoved" then count - 1
       when "CartCleared" then 0
@@ -65,17 +70,18 @@ post '/add_item' do
       return { error: "Cart cannot have more than 3 items" }.to_json
     end
     
-    event = {
-      "type" => "ItemAdded",
-      "cart_id" => payload["cart_id"],
-      "item_id" => payload["item_id"],
-      "product_id" => payload["product_id"],
-      "description" => payload["description"],
-      "image" => payload["image"],
-      "price" => payload["price"]
-    }
+    event = ItemAdded.new(
+      data: {
+        cart_id: payload["cart_id"],
+        item_id: payload["item_id"],
+        product_id: payload["product_id"],
+        description: payload["description"],
+        image: payload["image"],
+        price: payload["price"]
+      }
+    )
     
-    stored = store.write(event)
+    stored = store.write(events: [event])
     stored.to_json
   rescue JSON::ParserError
     status 400
@@ -93,27 +99,35 @@ delete '/remove_item' do
       QueryItem.new(
         types: %w[ItemAdded ItemRemoved], 
         properties: {"cart_id" => payload["cart_id"], "item_id" => payload["item_id"]}
+      ),
+      QueryItem.new(
+        types: %w[CartCleared], 
+        properties: {"cart_id" => payload["cart_id"]}
       )
     ])
 
     events = store.read(query: query)
 
+    puts events.map(&:to_h).to_json
+
     item_count = events.reduce(0) do |count, event|
-      case event["type"]
+      case event.type
       when "ItemAdded" then count + 1
       when "ItemRemoved" then count - 1
+      when "CartCleared" then 0
       else count
       end
     end
 
     if item_count > 0
-      event = {
-        "type" => "ItemRemoved",
-        "cart_id" => payload["cart_id"],
-        "item_id" => payload["item_id"]
-      }
+      event = ItemRemoved.new(
+        data: {
+          cart_id: payload["cart_id"],
+          item_id: payload["item_id"]
+        }
+      )
 
-      store.write(event)
+      store.write(events: [event])
       { message: "Item removed" }.to_json
     else
       status 404
@@ -131,12 +145,13 @@ delete '/clear_cart' do
   begin
     payload = JSON.parse(request.body.read)
 
-    event = {
-      "type" => "CartCleared",
-      "cart_id" => payload["cart_id"]
-    }
+    event = CartCleared.new(
+      data: {
+        cart_id: payload["cart_id"]
+      }
+    )
 
-    store.write(event)
+    store.write(events: [event])
     { message: "Cart cleared" }.to_json
   rescue JSON::ParserError
     status 400
@@ -157,19 +172,19 @@ get '/cart/:cart_id/items' do
   events = store.read(query: query)
   
   cart_data = events.reduce({ cart_id: params[:cart_id], items: [], total: 0.0 }) do |acc, event|
-    case event["type"]
+    case event.type
     when "ItemAdded"
       acc[:items] << {
-        'item_id' => event["item_id"],
-        'cart_id' => event["cart_id"],
-        'product_id' => event["product_id"],
-        'image' => event["image"],
-        'price' => event["price"],
-        'description' => event["description"]
+        'item_id' => event.data["item_id"],
+        'cart_id' => event.data["cart_id"],
+        'product_id' => event.data["product_id"],
+        'image' => event.data["image"],
+        'price' => event.data["price"],
+        'description' => event.data["description"]
       }
-      acc[:total] += event["price"].to_f
+      acc[:total] += event.data["price"].to_f
     when "ItemRemoved"
-      remove_index = acc[:items].find_index { |item| item['item_id'] == event["item_id"] }
+      remove_index = acc[:items].find_index { |item| item['item_id'] == event.data["item_id"] }
       if remove_index
         removed_item = acc[:items][remove_index]
         acc[:items].delete_at(remove_index)

@@ -7,11 +7,15 @@ class QueryItem
   end
 
   def to_match_variants
-    base = @properties.dup
+    base = {}
 
     unless @types.empty?
       pattern = Regexp.new("^(#{@types.join('|')})$", Regexp::IGNORECASE)
       base["type"] = pattern
+    end
+
+    @properties.each do |k, v|
+      base["data.#{k}"] = v
     end
 
     [base]
