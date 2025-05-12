@@ -1,3 +1,13 @@
-# Event Store
-/event_store/
-/event_store/*
+*.gem
+coverage/*
+Gemfile.lock
+*~
+.bundle
+.rvmrc
+log/*
+measurement/*
+pkg/*
+.DS_Store
+.env
+spec/dummy/tmp/*
+spec/dummy/log/*.log
