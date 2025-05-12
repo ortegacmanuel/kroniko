@@ -6,6 +6,8 @@ require_relative 'query_item'
 require_relative 'query'
 require_relative 'event'
 require_relative 'read_options'
+require_relative 'append_condition'
+require_relative 'append_condition_failed'
 
 class ItemAdded < Event; end
 class ItemRemoved < Event; end
@@ -83,11 +85,25 @@ post '/add_item' do
       }
     )
     
-    stored = store.write(events: [event])
+    stored = store.write(
+      events: [event], 
+      condition: AppendCondition.new(
+        fail_if_events_match: Query.new([
+          QueryItem.new(
+            types: ["ItemAdded"],
+            properties: { "cart_id" => payload["cart_id"] }
+          )
+        ]),
+        after: events.last&.position
+      )
+    )
     stored.to_json
   rescue JSON::ParserError
     status 400
     { error: "Invalid JSON payload" }.to_json
+  rescue AppendConditionFailed
+    status 400
+    { error: "Condition failed" }.to_json
   end
 end
 
