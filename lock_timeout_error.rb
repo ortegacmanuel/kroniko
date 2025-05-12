@@ -1,1 +1,0 @@
-class LockTimeoutError < StandardError; end

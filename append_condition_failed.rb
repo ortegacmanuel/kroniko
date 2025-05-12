@@ -1,1 +1,0 @@
-class AppendConditionFailed < StandardError; end
