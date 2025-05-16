@@ -68,7 +68,7 @@ For every key-value pair in an event's data:
 * Allows exact and partial (regex) queries using these indexes
 
 Visual reference:
-![Indexing Diagram](./A_diagram_illustrates_a_file-based_indexing_system.png)
+![Indexing Diagram](./indexing_diagram.png)
 
 ### 🔒 Locking
 
