@@ -6,6 +6,51 @@ This event store supports queryable indexing, optimistic concurrency control via
 
 ---
 
+## 🚀 Installation
+
+Add this gem to your project by including it in your `Gemfile`:
+
+```ruby
+gem 'kroniko', git: 'https://github.com/ortegacmanuel/kroniko.git'
+```
+
+Then run:
+
+```bash
+bundle install
+```
+
+Or install it manually via:
+
+```bash
+gem install kroniko --source https://github.com/ortegacmanuel/kroniko
+```
+
+---
+
+## 🏁 Getting Started
+
+Initialize the store:
+
+```ruby
+require 'kroniko'
+
+store = Kroniko::EventStore.new('event_store')
+```
+
+This creates the following directory structure:
+
+```
+event_store/
+├── events/       # Immutable event JSON files
+├── index/        # Indexes for querying by type and property
+├── log/
+│   └── append.log  # Global ordering of events
+└── locks/        # Lock files used for concurrency-safe writes
+```
+
+You're now ready to append and read events!
+
 ## ✨ How to Use
 
 ### ✍️ Appending / Writing Events
@@ -23,8 +68,8 @@ stored = store.write(
 You can enforce consistency by preventing writes if conflicting events exist.
 
 ```ruby
-query = Query.new([
-  QueryItem.new(
+query = Kroniko::Query.new([
+  Kroniko::QueryItem.new(
     types: ["ItemAdded"],
     properties: {"cart_id" => "123"}
   )
@@ -32,7 +77,7 @@ query = Query.new([
 
 store.write(
   events: [ItemAdded.new(data: {...})],
-  condition: AppendCondition.new(
+  condition: Kroniko::AppendCondition.new(
     fail_if_events_match: query,
     after: last_known_position
   )
@@ -87,8 +132,8 @@ This ensures multi-threaded and multi-process writes remain safe without long lo
 You can read events by building expressive queries:
 
 ```ruby
-query = Query.from_items([
-  QueryItem.new(
+query = Kroniko::Query.new([
+  Kroniko::QueryItem.new(
     types: ["UserCreated"],
     properties: {"email" => /^foo@/}
   )
